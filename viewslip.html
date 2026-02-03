@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ตรวจสอบสลิปเงินเดือน - สพป. นครสวรรค์ เขต 1</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700&display=block" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  
+  <style>
+    body { font-family: 'Sarabun', sans-serif; }
+    .glass-card {
+      background: rgba(181, 89, 242, 0.937);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.4);
+    }
+    .watermark {
+        position: absolute; top: 50%; left: 50%;
+        transform: translate(-50%, -50%) rotate(-30deg);
+        font-size: clamp(2rem, 8vw, 3.5rem); font-weight: 700;
+        color: rgba(0, 0, 0, 0.08); white-space: nowrap; pointer-events: none; z-index: 0;
+    }
+    .form-input { background-color: rgba(255, 255, 255, 0.85); border: 2px solid #0e2d66; }
+    .spinner {
+      border: 8px solid #f3f3f3; border-top: 8px solid #8b5cf6;
+      border-radius: 50%; width: 80px; height: 80px; animation: spin 1s linear infinite;
+    }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    
+    @media print {
+      @page { size: A4 portrait; margin: 1cm; }
+      body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; background: white; }
+      #page-container, body > footer, #close-slip-btn, #home-button-container, #captcha-container, #loading-spinner { display: none !important; }
+      #slip { display: block !important; width: 100%; }
+      .slip-container { box-shadow: none !important; border: 1px solid black !important; }
+    }
+  </style>
+</head>
+<body style="background: linear-gradient(to bottom, white 0%, #ffffff 30%, #ea9ef2 60%, #fa5eed 100%);" class="min-h-screen">
+  
+  <div id="loading-spinner" class="fixed inset-0 bg-black/60 flex justify-center items-center z-[1000] hidden backdrop-blur-sm">
+    <div class="text-center">
+      <div class="spinner mx-auto"></div>
+      <p id="loading-text" class="text-white mt-5 text-xl font-medium">กำลังติดต่อฐานข้อมูล...</p>
+    </div>
+  </div>
+  
+  <div id="page-container" class="flex flex-col items-center justify-center p-4 md:p-8">
+    <header class="text-center mb-8">
+      <img src="logo.jpg" alt="โลโก้" class="h-40 w-auto mx-auto mb-4" onerror="this.style.display='none'" />
+      <h1 class="text-xl sm:text-2xl font-bold text-gray-800">ระบบตรวจสอบสลิปเงินเดือน</h1>
+      <h3 class="text-lg sm:text-xl font-medium text-gray-700 mt-1">นครสวรรค์ เขต 1</h3>
+    </header>
+
+    <div class="w-full max-w-lg">
+      <div class="glass-card rounded-2xl p-6 sm:p-8 shadow-2xl">
+        <form id="payslip-form" class="space-y-6">
+          <div>
+            <label class="block mb-2 text-sm font-medium text-white">เลขประจำตัวประชาชน</label>
+            <div class="relative">
+              <span class="absolute inset-y-0 left-0 flex items-center pl-4 text-gray-400"><i class="fas fa-id-card"></i></span>
+              <input id="idcard-payslip" name="idcard" type="text" inputmode="numeric" pattern="\d*" required class="w-full form-input rounded-lg py-3 pl-12 pr-10 focus:ring-2 focus:ring-blue-400" placeholder="กรอกเลข 13 หลัก" />
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block mb-2 text-sm font-medium text-white">เดือน</label>
+              <select id="month-payslip" name="month" required class="w-full form-input rounded-lg py-3 px-4 focus:ring-2 focus:ring-blue-400">
+                <option value="" disabled selected>-- เลือกเดือน --</option>
+                <option value="1">มกราคม</option><option value="2">กุมภาพันธ์</option><option value="3">มีนาคม</option>
+                <option value="4">เมษายน</option><option value="5">พฤษภาคม</option><option value="6">มิถุนายน</option>
+                <option value="7">กรกฎาคม</option><option value="8">สิงหาคม</option><option value="9">กันยายน</option>
+                <option value="10">ตุลาคม</option><option value="11">พฤศจิกายน</option><option value="12">ธันวาคม</option>
+              </select>
+            </div>
+            <div>
+              <label class="block mb-2 text-sm font-medium text-white">ปี (พ.ศ.)</label>
+              <select id="year-payslip" name="year" required class="w-full form-input rounded-lg py-3 px-4 focus:ring-2 focus:ring-blue-400">
+                <option value="" disabled selected>-- เลือกปี --</option>
+              </select>
+            </div>
+          </div>
+          <div id="payslip-result" class="text-center text-red-600 font-semibold h-5"></div>
+          <button type="submit" class="w-full text-black font-bold px-4 py-3.5 rounded-lg shadow-lg hover:shadow-xl transition-all bg-gradient-to-r from-gray-300 to-gray-400">
+            <i class="fas fa-search mr-2"></i>ค้นหาสลิปเงินเดือน
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="slip" class="mt-8 print:mt-0 p-4"></div>
+
+  <script>
+    // --- ตั้งค่าปี (Auto Populate Years) ---
+    const yearSelect = document.getElementById("year-payslip");
+    const currentYear = new Date().getFullYear() + 543;
+    for (let y = currentYear; y >= 2560; y--) {
+        const opt = document.createElement("option");
+        opt.value = y; opt.textContent = y;
+        yearSelect.appendChild(opt);
+    }
+    yearSelect.value = currentYear; // เลือกปีปัจจุบัน
+
+    // --- ส่วนการทำงานหลัก ---
+    const loadingSpinner = document.getElementById('loading-spinner');
+    const payslipResultDiv = document.getElementById("payslip-result");
+    const slipDiv = document.getElementById("slip");
+    const pageContainer = document.getElementById("page-container");
+
+    document.getElementById("payslip-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const idcard = document.getElementById("idcard-payslip").value.trim();
+        const month = document.getElementById("month-payslip").value;
+        const year = document.getElementById("year-payslip").value;
+
+        if(idcard.length !== 13) {
+            payslipResultDiv.textContent = "กรุณากรอกเลข 13 หลักให้ถูกต้อง"; return;
+        }
+
+        loadingSpinner.classList.remove('hidden');
+        payslipResultDiv.textContent = "";
+
+        try {
+            // เรียก Netlify Function (API ของเรา)
+            const apiUrl = `/.netlify/functions/getPayslip?idcard=${idcard}&year=${year}&month=${month}`;
+            const response = await fetch(apiUrl);
+            const data = await response.json();
+
+            if (!response.ok) throw new Error(data.error || "ไม่พบข้อมูล");
+
+            renderSlip(data, month, year);
+
+        } catch (error) {
+            console.error(error);
+            slipDiv.innerHTML = `
+             <div class="max-w-md mx-auto text-center glass-card p-8 rounded-2xl mt-10">
+                 <i class="fas fa-exclamation-triangle fa-3x text-amber-500 mb-4"></i>
+                 <p class="text-xl font-bold text-gray-800">ไม่พบข้อมูล</p>
+                 <p class="text-gray-600 my-4">${error.message}</p>
+                 <button onclick="location.reload()" class="bg-blue-600 text-white px-6 py-2 rounded-lg">ลองใหม่</button>
+             </div>`;
+            pageContainer.classList.add('hidden');
+        } finally {
+            loadingSpinner.classList.add('hidden');
+        }
+    });
+
+    // ฟังก์ชันสร้างหน้าตาสลิป (นำมาจากโค้ดเดิม แต่ปรับให้เข้ากับ JSON MongoDB)
+    function renderSlip(data, month, year) {
+        pageContainer.classList.add('hidden');
+        
+        // Helper จัดการตัวเลข
+        const fmt = (num) => num ? num.toLocaleString('th-TH', {minimumFractionDigits: 2, maximumFractionDigits:2}) : "-";
+        
+        // Logic แยกหมวดหมู่ (เหมือนโค้ดเดิม)
+        const income = [], expense = [], other = [];
+        let totalInc = 0, totalExp = 0, net = 0;
+
+        // วนลูป Object เพื่อแยกประเภท (Data MongoDB จะมี key เป็นชื่อไทยเหมือน Firestore)
+        for (const [key, val] of Object.entries(data)) {
+            if(["_id", "year", "month", "batchId", "asOfDateISO", "asOfText", "เลขประจำตัวประชาชน", "ชื่อ นามสกุล", "ตำแหน่ง", "หน่วยงาน", "ส่วนราชการผู้เบิก"].includes(key)) continue;
+            
+            const numVal = parseFloat(val);
+            if(isNaN(numVal) || numVal === 0) continue;
+
+            if(key.includes("รายรับ") || key.includes("เงินเดือน") || key.includes("พ.ต.ก")) {
+                income.push({n: key.replace("รายรับ - ", ""), v: numVal});
+                totalInc += numVal; // ใช้ค่ารวมจากรายการ หรือจะใช้ field "รวม - รายรับ" จาก DB ก็ได้
+            } else if(key.includes("รายจ่าย") || key.includes("ภาษี") || key.includes("สหกรณ์") || key.includes("กบข")) {
+                expense.push({n: key.replace("รายจ่ายเรียกเก็บ - ", "").replace("รายจ่ายหักเก็บได้ - ",""), v: numVal});
+                totalExp += numVal;
+            }
+        }
+        
+        // ถ้าใน DB มี field สรุปยอด ให้ใช้ค่าจาก DB เพื่อความแม่นยำ
+        if(data["รวม - รายรับ"]) totalInc = parseFloat(data["รวม - รายรับ"]);
+        if(data["รวม - รายจ่าย"]) totalExp = parseFloat(data["รวม - รายจ่าย"]);
+        if(data["รวม - คงเหลือ"]) net = parseFloat(data["รวม - คงเหลือ"]);
+
+        // สร้าง HTML ตาราง (ย่อ)
+        const slipHtml = `
+          <div id="slip-content-to-export" class="max-w-4xl mx-auto border border-black bg-white text-gray-800 relative p-8 shadow-2xl">
+            <div class="watermark">สพป. นครสวรรค์ เขต 1</div>
+            <button onclick="location.reload()" class="absolute top-2 right-2 text-2xl font-bold text-gray-500 hover:text-red-500 print:hidden">&times;</button>
+            
+            <header class="text-center border-b-2 border-black pb-4 mb-4">
+                <h1 class="text-xl font-bold">ใบรับเงินเดือน / ค่าจ้างประจำ</h1>
+                <p>สำนักงานเขตพื้นที่การศึกษาประถมศึกษานครสวรรค์ เขต 1</p>
+                <p>ประจำเดือน ${document.querySelector(`option[value="${month}"]`).textContent} พ.ศ. ${year}</p>
+            </header>
+            
+            <div class="flex justify-between mb-4 font-bold">
+                <div>ชื่อ: ${data["ชื่อ นามสกุล"] || "-"}</div>
+                <div>ตำแหน่ง: ${data["ตำแหน่ง"] || "-"}</div>
+            </div>
+            
+            <table class="w-full border-collapse border border-black text-sm">
+                <thead>
+                    <tr class="bg-gray-100">
+                        <th class="border border-black p-2 w-1/2">รายการรับ</th>
+                        <th class="border border-black p-2 w-1/2">รายการจ่าย</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="align-top">
+                        <td class="border border-black p-0">
+                            <table class="w-full">
+                                ${income.map(i => `<tr><td class="p-1">${i.n}</td><td class="text-right p-1">${fmt(i.v)}</td></tr>`).join('')}
+                            </table>
+                        </td>
+                        <td class="border border-black p-0">
+                             <table class="w-full">
+                                ${expense.map(i => `<tr><td class="p-1">${i.n}</td><td class="text-right p-1">${fmt(i.v)}</td></tr>`).join('')}
+                            </table>
+                        </td>
+                    </tr>
+                </tbody>
+                <tfoot>
+                    <tr class="font-bold bg-gray-50">
+                        <td class="border border-black p-2 flex justify-between"><span>รวมรับ</span> <span>${fmt(totalInc)}</span></td>
+                        <td class="border border-black p-2 text-right"><span>รวมจ่าย ${fmt(totalExp)}</span></td>
+                    </tr>
+                </tfoot>
+            </table>
+            
+            <div class="mt-4 p-4 border border-black bg-yellow-50 text-center">
+                <h2 class="text-xl font-bold">คงเหลือสุทธิ: ${fmt(net)} บาท</h2>
+            </div>
+            
+             <footer class="mt-8 text-center print:hidden flex justify-center gap-4">
+                <button onclick="window.print()" class="bg-gray-600 text-white px-6 py-2 rounded shadow"><i class="fas fa-print"></i> พิมพ์</button>
+            </footer>
+          </div>
+        `;
+        
+        slipDiv.innerHTML = slipHtml;
+    }
+  </script>
+</body>
+</html>
