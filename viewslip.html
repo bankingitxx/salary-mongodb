@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ตรวจสอบสลิปเงินเดือน - สพป. นครสวรรค์ เขต 1</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Library สำหรับ PDF -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   
@@ -44,6 +45,7 @@
 </head>
 <body style="background: linear-gradient(to bottom, white 0%, #ffffff 30%, #ea9ef2 60%, #fa5eed 100%);" class="min-h-screen">
   
+  <!-- Loading -->
   <div id="loading-spinner" class="fixed inset-0 bg-black/60 flex justify-center items-center z-[1000] hidden backdrop-blur-sm">
     <div class="text-center">
       <div class="spinner mx-auto"></div>
@@ -98,10 +100,23 @@
   <div id="slip" class="mt-8 print:mt-0 p-4"></div>
 
   <script>
-    // --- Helper Functions (จากโค้ดเดิม) ---
+    // --- Helper Functions ---
     const thaiMonths = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
     const formatCurrency = (num) => (num === null || num === undefined || isNaN(num)) ? '-' : num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     
+    // ฟังก์ชันช่วยหาค่าจาก Key ที่อาจจะเขียนต่างกัน
+    const getValueByPossibleKeys = (obj, keysToCheck) => {
+        const normalize = str => str.replace(/\s+/g, "").trim();
+        for (const key of keysToCheck) {
+            // เช็คแบบตรงตัว
+            if (obj[key] !== undefined && obj[key] !== "") return obj[key];
+            // เช็คแบบตัดช่องว่าง
+            const foundKey = Object.keys(obj).find(k => normalize(k) === normalize(key));
+            if (foundKey && obj[foundKey] !== undefined && obj[foundKey] !== "") return obj[foundKey];
+        }
+        return null;
+    };
+
     function numberToThaiBahtText(number) {
         if (number === null || isNaN(number)) return '';
         let bahttext = '';
@@ -140,7 +155,6 @@
         const mapRight = new Map(rightItems.map(i => [normalize(i.name), i.value]));
         const allKeys = new Set([...mapLeft.keys(), ...mapRight.keys()]);
         
-        // ลำดับการเรียงรายจ่าย (เพื่อให้เหมือนเดิม)
         const expenseOrder = [ "ภาษี", "กบข", "กสจ", "กบข.ตกเบิก", "กบข ส่วนเพิ่มเติม", "ชพค", "ชพส", "สหกรณ์ออมทรัพย์ครูนครสวรรค์ จำกัด", "ธ.อาคารสงเคราะห์", "ออมสิน" ];
         
         const sortedKeys = Array.from(allKeys).sort((a, b) => { 
@@ -155,10 +169,16 @@
         return sortedKeys.map(name => ({ name, left: mapLeft.get(name) || 0, right: mapRight.get(name) || 0 }));
     };
 
-    const findFieldByPartialKey = (obj, partial) => { 
+    // Helper ใหม่สำหรับการหา Key แบบยืดหยุ่นกว่าเดิม
+    const findFieldBySmartSearch = (obj, keywords) => { 
         const normalize = str => str.replace(/\s+/g, ""); 
-        const target = normalize(partial); 
-        return Object.keys(obj).find(key => normalize(key).includes(target)); 
+        // 1. ลองหา Partial Match ของแต่ละ keyword
+        for (const kw of keywords) {
+             const target = normalize(kw); 
+             const found = Object.keys(obj).find(key => normalize(key).includes(target));
+             if(found) return found;
+        }
+        return null;
     };
 
     // --- ตั้งค่าปี ---
@@ -191,7 +211,6 @@
         payslipResultDiv.textContent = "";
 
         try {
-            // เรียก Netlify Function
             const apiUrl = `/.netlify/functions/getPayslip?idcard=${idcard}&year=${year}&month=${month}`;
             const response = await fetch(apiUrl);
             const data = await response.json();
@@ -215,17 +234,39 @@
         }
     });
 
-    // --- ฟังก์ชัน Render UI แบบต้นฉบับ ---
     function renderSlipOriginal(data, month, year) {
         pageContainer.classList.add('hidden');
-        
         const monthName = thaiMonths[month-1];
+        
+        // --- 1. จัดการเรื่อง "ชื่อ" (Smart Search) ---
+        // ลองหาจากหลายๆ key ที่เป็นไปได้
+        const possibleNameKeys = ["ชื่อ นามสกุล", "ชื่อ-สกุล", "ชื่อ - สกุล", "ชื่อตัว - ชื่อสกุล", "ชื่อข้าราชการ", "ชื่อผู้รับเงิน"];
+        let userName = getValueByPossibleKeys(data, possibleNameKeys);
+        if (!userName) userName = "-";
+
+        // --- 2. จัดการเรื่อง "ตำแหน่ง/หน่วยงาน" ---
+        const possiblePosKeys = ["ตำแหน่ง"];
+        let userPos = getValueByPossibleKeys(data, possiblePosKeys);
+
+        const possibleUnitKeys = ["หน่วยงาน", "สังกัด", "ส่วนราชการผู้เบิก", "โรงเรียน"];
+        let userUnit = getValueByPossibleKeys(data, possibleUnitKeys);
+        
+        // ถ้าเป็นบำนาญ (สังเกตจากไม่มีตำแหน่ง แต่มีส่วนราชการผู้เบิก)
+        if (!userPos && userUnit) {
+             userPos = "-"; // บำนาญไม่มีตำแหน่ง
+        }
+
+        // --- 3. แยกรายการ รับ/จ่าย ---
         const incomeItems = [], expenseLeft = [], expenseRight = [], nondeductItems = [];
         
-        // วนลูปจัดกลุ่มข้อมูล (เหมือนโค้ดเดิม)
         for (const [key, value] of Object.entries(data)) {
             const val = Number(value);
-            if (key.includes("เงินโอนเข้าบัญชี") || isNaN(val) || val === 0) continue;
+            // ข้าม field ข้อมูลทั่วไป และ เงินโอน (จะไปหาแยกต่างหาก)
+            if (["_id", "year", "month", "batchId", "asOfText", "asOfDateISO"].includes(key)) continue;
+            if (key.includes("เงินโอน") || key.includes("วันที่โอน")) continue;
+            if (possibleNameKeys.includes(key) || possiblePosKeys.includes(key) || possibleUnitKeys.includes(key) || key === "เลขประจำตัวประชาชน") continue;
+            
+            if (isNaN(val) || val === 0) continue;
             
             const cleanName = (prefix) => key.replace(prefix, "").replace(/[’']/g, "").trim();
             
@@ -233,33 +274,60 @@
             else if (key.startsWith("รายจ่ายเรียกเก็บ")) expenseLeft.push({ name: cleanName("รายจ่ายเรียกเก็บ - "), value: val });
             else if (key.startsWith("รายจ่ายหักเก็บได้")) expenseRight.push({ name: cleanName("รายจ่ายหักเก็บได้ - "), value: val });
             else if (key.startsWith("หักไม่ได้")) nondeductItems.push({ name: cleanName("หักไม่ได้ - "), value: val });
+            // กรณีไม่มี prefix (เช่น บำนาญบางทีมาเป็นก้อน) และไม่ใช่ยอดรวม
+            else if (!key.startsWith("รวม") && val > 0) {
+                 // เดาว่าเป็นรายรับไว้ก่อน ถ้าชื่อดูดี
+                 if(!key.includes("ภาษี") && !key.includes("สหกรณ์") && !key.includes("กบข") && !key.includes("ชพค")) {
+                     incomeItems.push({ name: key, value: val });
+                 }
+            }
         }
 
-        // เรียงลำดับรายได้
-        const incomeOrder = [ "เงินเดือน", "เงินวิทยฐานะ", "เงินค่าตอบแทน", "เงินเพิ่มค่าครองชีพ", "เงิน พ.ต.ก.", "ตกเบิก", "ค่าตอบแทนเต็มขั้น" ];
+        const incomeOrder = [ "เงินเดือน", "เงินบำนาญ", "เงินวิทยฐานะ", "เงินค่าตอบแทน", "เงินเพิ่มค่าครองชีพ", "เงิน พ.ต.ก.", "ตกเบิก" ];
         incomeItems.sort((a, b) => { 
             const ia = incomeOrder.findIndex(k => a.name.includes(k)); 
             const ib = incomeOrder.findIndex(k => b.name.includes(k));
             return (ia !== -1 && ib !== -1) ? ia - ib : (ia !== -1 ? -1 : (ib !== -1 ? 1 : 0));
         });
 
-        // รวมรายจ่ายซ้าย-ขวา ให้เป็นบรรทัดเดียวกัน
         const expenseMerged = mergeExpensePairs(expenseLeft, expenseRight);
         
-        // คำนวณยอดรวม (ใช้ค่าจาก DB ถ้ามี หรือคำนวณเอง)
         const totalIncome = Number(data["รวม - รายรับ"]) || incomeItems.reduce((s,i)=>s+i.value,0);
-        const totalDeducted = Number(data["รวม - รายจ่าย"]) || expenseMerged.reduce((s,i)=>s+i.right,0); // ปกติใช้ยอดหักเก็บได้เป็นยอดรวมจ่ายจริง
+        const totalDeducted = Number(data["รวม - รายจ่าย"]) || expenseMerged.reduce((s,i)=>s+i.right,0); 
         const totalBilled = expenseMerged.reduce((s,i)=>s+i.left,0);
         const net = Number(data["รวม - คงเหลือ"]) || (totalIncome - totalDeducted);
         const netInThai = numberToThaiBahtText(net);
 
-        // หาข้อมูลเงินโอน
-        const key1 = findFieldByPartialKey(data, "เงินโอนเข้าบัญชี รอบ 1");
-        const key2 = findFieldByPartialKey(data, "เงินโอนเข้าบัญชี รอบ 2");
-        const round1 = key1 ? Number(data[key1]) : 0;
-        const round2 = key2 ? Number(data[key2]) : 0;
+        // --- 4. จัดการเรื่อง "เงินโอน" (Smart Search วันที่และยอด) ---
+        // หา Key ที่เกี่ยวกับวันโอน
+        const keyDate1 = findFieldBySmartSearch(data, ["เงินโอนเข้าบัญชี รอบ 1", "วันที่โอน", "โอนวันที่"]);
+        const keyDate2 = findFieldBySmartSearch(data, ["เงินโอนเข้าบัญชี รอบ 2"]);
+        
+        let dateText1 = "-", amount1 = 0;
+        let dateText2 = "-", amount2 = 0;
 
-        // สร้างแถวตาราง (Desktop)
+        if (keyDate1) {
+            // ดึงวันที่จาก Key (เช่น "เงินโอน... วันที่ 16 ม.ค.")
+            const match = keyDate1.match(/วันที่\s*(.*)/);
+            dateText1 = match ? match[1] : (data[keyDate1+"_date"] || "-"); // support possible separate date field
+            amount1 = Number(data[keyDate1]) || 0;
+        }
+
+        if (keyDate2) {
+            const match = keyDate2.match(/วันที่\s*(.*)/);
+            dateText2 = match ? match[1] : "-";
+            amount2 = Number(data[keyDate2]) || 0;
+        }
+
+        // กรณีบำนาญ อาจจะไม่มี "รอบ 1" แต่โอนยอดสุทธิเลย
+        if (amount1 === 0 && amount2 === 0 && net > 0) {
+            // ลองหา field ที่ชื่อ "โอนสุทธิ" หรืออนุมานว่าโอนยอดสุทธิทั้งหมด
+             amount1 = net;
+             // ถ้าหา key วันที่โอนไม่เจอ ให้ใช้วันที่ปัจจุบันหรือ - ไปก่อน
+             if(dateText1 === "-") dateText1 = "(ตามกำหนดจ่าย)";
+        }
+
+        // --- สร้าง HTML ---
         const maxRows = Math.max(incomeItems.length, expenseMerged.length);
         let tableRowsHtml = '';
         for (let i = 0; i < maxRows; i++) {
@@ -275,7 +343,6 @@
             </tr>`;
         }
 
-        // HTML หลัก
         const slipHtml = `
           <div id="slip-content-to-export" class="max-w-4xl mx-auto border border-black bg-white text-gray-800 relative shadow-2xl p-0">
             <div class="watermark">สพป. นครสวรรค์ เขต 1</div>
@@ -288,8 +355,8 @@
             </header>
             
             <div class="px-6 py-2 flex justify-between items-end border-b border-black bg-gray-50">
-                <div class="text-lg font-bold">ชื่อ: ${data["ชื่อ นามสกุล"] || "-"}</div>
-                <div class="text-sm">ตำแหน่ง: ${data["ตำแหน่ง"] || "-"}</div>
+                <div class="text-lg font-bold">ชื่อ: ${userName}</div>
+                <div class="text-sm">ตำแหน่ง: ${userPos || "-"} ${userUnit ? "("+userUnit+")" : ""}</div>
             </div>
             
             <div class="w-full overflow-x-auto">
@@ -324,18 +391,18 @@
                 <div class="text-sm text-gray-600">(${netInThai})</div>
             </div>
 
-            <div class="border-t border-black p-4 text-sm bg-white grid grid-cols-1 sm:grid-cols-2 gap-4">
+             <div class="border-t border-black p-4 text-sm bg-white grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div class="flex justify-between border-b sm:border-b-0 sm:border-r border-gray-200 p-2">
-                    <span><i class="fas fa-calendar-check mr-2 text-green-600"></i>โอนรอบ 1 (วันที่ ${key1 ? (key1.match(/วันที่ (.*)/)?.[1] || '-') : '-'})</span>
-                    <span class="font-bold">${formatCurrency(round1)}</span>
+                    <span><i class="fas fa-calendar-check mr-2 text-green-600"></i>โอนรอบ 1 (วันที่ ${dateText1})</span>
+                    <span class="font-bold">${formatCurrency(amount1)}</span>
                 </div>
                 <div class="flex justify-between p-2">
-                    <span><i class="fas fa-calendar-check mr-2 text-green-600"></i>โอนรอบ 2 (วันที่ ${key2 ? (key2.match(/วันที่ (.*)/)?.[1] || '-') : '-'})</span>
-                    <span class="font-bold">${formatCurrency(round2)}</span>
+                    <span><i class="fas fa-calendar-check mr-2 text-green-600"></i>โอนรอบ 2 (วันที่ ${dateText2})</span>
+                    <span class="font-bold">${formatCurrency(amount2)}</span>
                 </div>
             </div>
 
-            <footer class="p-6 text-center print-hidden bg-gray-50 border-t border-black flex justify-center gap-4">
+             <footer class="p-6 text-center print-hidden bg-gray-50 border-t border-black flex justify-center gap-4">
                 <button onclick="window.print()" class="bg-gray-700 hover:bg-black text-white px-6 py-2 rounded shadow flex items-center">
                     <i class="fas fa-print mr-2"></i> พิมพ์
                 </button>
@@ -348,7 +415,6 @@
         
         slipDiv.innerHTML = slipHtml;
 
-        // PDF Listener
         document.getElementById('download-pdf-btn').addEventListener('click', async () => {
              const element = document.getElementById('slip-content-to-export');
              const btns = element.querySelector('footer');
