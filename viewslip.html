@@ -7,6 +7,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  
   <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700&display=block" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   
@@ -34,9 +35,10 @@
     @media print {
       @page { size: A4 portrait; margin: 1cm; }
       body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; background: white; }
-      #page-container, body > footer, #close-slip-btn, #home-button-container, #captcha-container, #loading-spinner { display: none !important; }
+      #page-container, body > footer, #loading-spinner { display: none !important; }
       #slip { display: block !important; width: 100%; }
       .slip-container { box-shadow: none !important; border: 1px solid black !important; }
+      .print-hidden { display: none !important; }
     }
   </style>
 </head>
@@ -52,7 +54,7 @@
   <div id="page-container" class="flex flex-col items-center justify-center p-4 md:p-8">
     <header class="text-center mb-8">
       <img src="logo.jpg" alt="โลโก้" class="h-40 w-auto mx-auto mb-4" onerror="this.style.display='none'" />
-      <h1 class="text-xl sm:text-2xl font-bold text-gray-800">ระบบตรวจสอบสลิปเงินเดือน</h1>
+      <h1 class="text-xl sm:text-2xl font-bold text-gray-800">ระบบตรวจสอบสลิปเงินเดือน (MongoDB)</h1>
       <h3 class="text-lg sm:text-xl font-medium text-gray-700 mt-1">นครสวรรค์ เขต 1</h3>
     </header>
 
@@ -96,7 +98,70 @@
   <div id="slip" class="mt-8 print:mt-0 p-4"></div>
 
   <script>
-    // --- ตั้งค่าปี (Auto Populate Years) ---
+    // --- Helper Functions (จากโค้ดเดิม) ---
+    const thaiMonths = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+    const formatCurrency = (num) => (num === null || num === undefined || isNaN(num)) ? '-' : num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    
+    function numberToThaiBahtText(number) {
+        if (number === null || isNaN(number)) return '';
+        let bahttext = '';
+        let [baht, satang] = String(number.toFixed(2)).split('.');
+        const processChunk = (chunk) => {
+            let chunkText = '';
+            const NumberInt = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ"];
+            const NumberRank = ["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน"];
+            let n = chunk.split('').map(Number);
+            for (let i = 0; i < n.length; i++) {
+                if (n[i] !== 0) {
+                    if (i === (n.length - 1) && n[i] === 1 && n.length > 1 && n.length < 7) chunkText += 'เอ็ด';
+                    else if (i === (n.length - 2) && n[i] === 2) chunkText += 'ยี่';
+                    else if (i === (n.length - 2) && n[i] === 1) chunkText += '';
+                    else chunkText += NumberInt[n[i]];
+                    chunkText += NumberRank[n.length - i - 1];
+                }
+            }
+            return chunkText;
+        };
+        if (baht.length > 6) {
+            let millions = baht.substring(0, baht.length - 6);
+            let remainder = baht.substring(baht.length - 6);
+            bahttext += processChunk(millions) + 'ล้าน';
+            bahttext += processChunk(remainder);
+        } else { bahttext += processChunk(baht); }
+        if (baht !== '0') bahttext += 'บาท';
+        if (satang === '00' && baht !== '0') bahttext += 'ถ้วน';
+        else if (satang !== '00') bahttext += processChunk(satang) + 'สตางค์';
+        return bahttext ? `(${bahttext})` : '';
+    }
+
+    const mergeExpensePairs = (leftItems, rightItems) => {
+        const normalize = str => str.replace(/[’']/g, "").trim();
+        const mapLeft = new Map(leftItems.map(i => [normalize(i.name), i.value]));
+        const mapRight = new Map(rightItems.map(i => [normalize(i.name), i.value]));
+        const allKeys = new Set([...mapLeft.keys(), ...mapRight.keys()]);
+        
+        // ลำดับการเรียงรายจ่าย (เพื่อให้เหมือนเดิม)
+        const expenseOrder = [ "ภาษี", "กบข", "กสจ", "กบข.ตกเบิก", "กบข ส่วนเพิ่มเติม", "ชพค", "ชพส", "สหกรณ์ออมทรัพย์ครูนครสวรรค์ จำกัด", "ธ.อาคารสงเคราะห์", "ออมสิน" ];
+        
+        const sortedKeys = Array.from(allKeys).sort((a, b) => { 
+            const findInOrder = (name) => expenseOrder.findIndex(orderItem => name.includes(orderItem)); 
+            const indexA = findInOrder(a); const indexB = findInOrder(b); 
+            if (indexA !== -1 && indexB !== -1) return indexA - indexB; 
+            if (indexA !== -1) return -1; 
+            if (indexB !== -1) return 1; 
+            return a.localeCompare(b, 'th'); 
+        });
+
+        return sortedKeys.map(name => ({ name, left: mapLeft.get(name) || 0, right: mapRight.get(name) || 0 }));
+    };
+
+    const findFieldByPartialKey = (obj, partial) => { 
+        const normalize = str => str.replace(/\s+/g, ""); 
+        const target = normalize(partial); 
+        return Object.keys(obj).find(key => normalize(key).includes(target)); 
+    };
+
+    // --- ตั้งค่าปี ---
     const yearSelect = document.getElementById("year-payslip");
     const currentYear = new Date().getFullYear() + 543;
     for (let y = currentYear; y >= 2560; y--) {
@@ -104,9 +169,9 @@
         opt.value = y; opt.textContent = y;
         yearSelect.appendChild(opt);
     }
-    yearSelect.value = currentYear; // เลือกปีปัจจุบัน
+    yearSelect.value = currentYear;
 
-    // --- ส่วนการทำงานหลัก ---
+    // --- Main Logic ---
     const loadingSpinner = document.getElementById('loading-spinner');
     const payslipResultDiv = document.getElementById("payslip-result");
     const slipDiv = document.getElementById("slip");
@@ -126,14 +191,14 @@
         payslipResultDiv.textContent = "";
 
         try {
-            // เรียก Netlify Function (API ของเรา)
+            // เรียก Netlify Function
             const apiUrl = `/.netlify/functions/getPayslip?idcard=${idcard}&year=${year}&month=${month}`;
             const response = await fetch(apiUrl);
             const data = await response.json();
 
             if (!response.ok) throw new Error(data.error || "ไม่พบข้อมูล");
 
-            renderSlip(data, month, year);
+            renderSlipOriginal(data, month, year);
 
         } catch (error) {
             console.error(error);
@@ -142,7 +207,7 @@
                  <i class="fas fa-exclamation-triangle fa-3x text-amber-500 mb-4"></i>
                  <p class="text-xl font-bold text-gray-800">ไม่พบข้อมูล</p>
                  <p class="text-gray-600 my-4">${error.message}</p>
-                 <button onclick="location.reload()" class="bg-blue-600 text-white px-6 py-2 rounded-lg">ลองใหม่</button>
+                 <button onclick="location.reload()" class="bg-blue-600 text-white px-6 py-2 rounded-lg">กลับไปค้นหาใหม่</button>
              </div>`;
             pageContainer.classList.add('hidden');
         } finally {
@@ -150,95 +215,165 @@
         }
     });
 
-    // ฟังก์ชันสร้างหน้าตาสลิป (นำมาจากโค้ดเดิม แต่ปรับให้เข้ากับ JSON MongoDB)
-    function renderSlip(data, month, year) {
+    // --- ฟังก์ชัน Render UI แบบต้นฉบับ ---
+    function renderSlipOriginal(data, month, year) {
         pageContainer.classList.add('hidden');
         
-        // Helper จัดการตัวเลข
-        const fmt = (num) => num ? num.toLocaleString('th-TH', {minimumFractionDigits: 2, maximumFractionDigits:2}) : "-";
+        const monthName = thaiMonths[month-1];
+        const incomeItems = [], expenseLeft = [], expenseRight = [], nondeductItems = [];
         
-        // Logic แยกหมวดหมู่ (เหมือนโค้ดเดิม)
-        const income = [], expense = [], other = [];
-        let totalInc = 0, totalExp = 0, net = 0;
-
-        // วนลูป Object เพื่อแยกประเภท (Data MongoDB จะมี key เป็นชื่อไทยเหมือน Firestore)
-        for (const [key, val] of Object.entries(data)) {
-            if(["_id", "year", "month", "batchId", "asOfDateISO", "asOfText", "เลขประจำตัวประชาชน", "ชื่อ นามสกุล", "ตำแหน่ง", "หน่วยงาน", "ส่วนราชการผู้เบิก"].includes(key)) continue;
+        // วนลูปจัดกลุ่มข้อมูล (เหมือนโค้ดเดิม)
+        for (const [key, value] of Object.entries(data)) {
+            const val = Number(value);
+            if (key.includes("เงินโอนเข้าบัญชี") || isNaN(val) || val === 0) continue;
             
-            const numVal = parseFloat(val);
-            if(isNaN(numVal) || numVal === 0) continue;
-
-            if(key.includes("รายรับ") || key.includes("เงินเดือน") || key.includes("พ.ต.ก")) {
-                income.push({n: key.replace("รายรับ - ", ""), v: numVal});
-                totalInc += numVal; // ใช้ค่ารวมจากรายการ หรือจะใช้ field "รวม - รายรับ" จาก DB ก็ได้
-            } else if(key.includes("รายจ่าย") || key.includes("ภาษี") || key.includes("สหกรณ์") || key.includes("กบข")) {
-                expense.push({n: key.replace("รายจ่ายเรียกเก็บ - ", "").replace("รายจ่ายหักเก็บได้ - ",""), v: numVal});
-                totalExp += numVal;
-            }
+            const cleanName = (prefix) => key.replace(prefix, "").replace(/[’']/g, "").trim();
+            
+            if (key.startsWith("รายรับ")) incomeItems.push({ name: cleanName("รายรับ - "), value: val });
+            else if (key.startsWith("รายจ่ายเรียกเก็บ")) expenseLeft.push({ name: cleanName("รายจ่ายเรียกเก็บ - "), value: val });
+            else if (key.startsWith("รายจ่ายหักเก็บได้")) expenseRight.push({ name: cleanName("รายจ่ายหักเก็บได้ - "), value: val });
+            else if (key.startsWith("หักไม่ได้")) nondeductItems.push({ name: cleanName("หักไม่ได้ - "), value: val });
         }
-        
-        // ถ้าใน DB มี field สรุปยอด ให้ใช้ค่าจาก DB เพื่อความแม่นยำ
-        if(data["รวม - รายรับ"]) totalInc = parseFloat(data["รวม - รายรับ"]);
-        if(data["รวม - รายจ่าย"]) totalExp = parseFloat(data["รวม - รายจ่าย"]);
-        if(data["รวม - คงเหลือ"]) net = parseFloat(data["รวม - คงเหลือ"]);
 
-        // สร้าง HTML ตาราง (ย่อ)
+        // เรียงลำดับรายได้
+        const incomeOrder = [ "เงินเดือน", "เงินวิทยฐานะ", "เงินค่าตอบแทน", "เงินเพิ่มค่าครองชีพ", "เงิน พ.ต.ก.", "ตกเบิก", "ค่าตอบแทนเต็มขั้น" ];
+        incomeItems.sort((a, b) => { 
+            const ia = incomeOrder.findIndex(k => a.name.includes(k)); 
+            const ib = incomeOrder.findIndex(k => b.name.includes(k));
+            return (ia !== -1 && ib !== -1) ? ia - ib : (ia !== -1 ? -1 : (ib !== -1 ? 1 : 0));
+        });
+
+        // รวมรายจ่ายซ้าย-ขวา ให้เป็นบรรทัดเดียวกัน
+        const expenseMerged = mergeExpensePairs(expenseLeft, expenseRight);
+        
+        // คำนวณยอดรวม (ใช้ค่าจาก DB ถ้ามี หรือคำนวณเอง)
+        const totalIncome = Number(data["รวม - รายรับ"]) || incomeItems.reduce((s,i)=>s+i.value,0);
+        const totalDeducted = Number(data["รวม - รายจ่าย"]) || expenseMerged.reduce((s,i)=>s+i.right,0); // ปกติใช้ยอดหักเก็บได้เป็นยอดรวมจ่ายจริง
+        const totalBilled = expenseMerged.reduce((s,i)=>s+i.left,0);
+        const net = Number(data["รวม - คงเหลือ"]) || (totalIncome - totalDeducted);
+        const netInThai = numberToThaiBahtText(net);
+
+        // หาข้อมูลเงินโอน
+        const key1 = findFieldByPartialKey(data, "เงินโอนเข้าบัญชี รอบ 1");
+        const key2 = findFieldByPartialKey(data, "เงินโอนเข้าบัญชี รอบ 2");
+        const round1 = key1 ? Number(data[key1]) : 0;
+        const round2 = key2 ? Number(data[key2]) : 0;
+
+        // สร้างแถวตาราง (Desktop)
+        const maxRows = Math.max(incomeItems.length, expenseMerged.length);
+        let tableRowsHtml = '';
+        for (let i = 0; i < maxRows; i++) {
+            const inc = incomeItems[i];
+            const exp = expenseMerged[i];
+            tableRowsHtml += `
+            <tr class="h-8 border-b border-gray-200">
+                <td class="p-2 align-middle border-r border-black">${inc ? inc.name : '&nbsp;'}</td>
+                <td class="p-2 align-middle text-right border-r-2 border-black">${inc ? formatCurrency(inc.value) : ''}</td>
+                <td class="p-2 align-middle border-r border-black pl-4">${exp ? exp.name : '&nbsp;'}</td>
+                <td class="p-2 align-middle text-right border-r border-black">${exp ? formatCurrency(exp.left) : ''}</td>
+                <td class="p-2 align-middle text-right">${exp ? formatCurrency(exp.right) : ''}</td>
+            </tr>`;
+        }
+
+        // HTML หลัก
         const slipHtml = `
-          <div id="slip-content-to-export" class="max-w-4xl mx-auto border border-black bg-white text-gray-800 relative p-8 shadow-2xl">
+          <div id="slip-content-to-export" class="max-w-4xl mx-auto border border-black bg-white text-gray-800 relative shadow-2xl p-0">
             <div class="watermark">สพป. นครสวรรค์ เขต 1</div>
-            <button onclick="location.reload()" class="absolute top-2 right-2 text-2xl font-bold text-gray-500 hover:text-red-500 print:hidden">&times;</button>
+            <button onclick="location.reload()" class="absolute top-2 right-2 text-3xl text-gray-400 hover:text-red-500 print:hidden">&times;</button>
             
-            <header class="text-center border-b-2 border-black pb-4 mb-4">
+            <header class="text-center p-6 border-b-2 border-black">
                 <h1 class="text-xl font-bold">ใบรับเงินเดือน / ค่าจ้างประจำ</h1>
-                <p>สำนักงานเขตพื้นที่การศึกษาประถมศึกษานครสวรรค์ เขต 1</p>
-                <p>ประจำเดือน ${document.querySelector(`option[value="${month}"]`).textContent} พ.ศ. ${year}</p>
+                <p class="font-bold text-gray-700">สำนักงานเขตพื้นที่การศึกษาประถมศึกษานครสวรรค์ เขต 1</p>
+                <p>ประจำเดือน ${monthName} พ.ศ. ${year}</p>
             </header>
             
-            <div class="flex justify-between mb-4 font-bold">
-                <div>ชื่อ: ${data["ชื่อ นามสกุล"] || "-"}</div>
-                <div>ตำแหน่ง: ${data["ตำแหน่ง"] || "-"}</div>
+            <div class="px-6 py-2 flex justify-between items-end border-b border-black bg-gray-50">
+                <div class="text-lg font-bold">ชื่อ: ${data["ชื่อ นามสกุล"] || "-"}</div>
+                <div class="text-sm">ตำแหน่ง: ${data["ตำแหน่ง"] || "-"}</div>
             </div>
             
-            <table class="w-full border-collapse border border-black text-sm">
-                <thead>
-                    <tr class="bg-gray-100">
-                        <th class="border border-black p-2 w-1/2">รายการรับ</th>
-                        <th class="border border-black p-2 w-1/2">รายการจ่าย</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr class="align-top">
-                        <td class="border border-black p-0">
-                            <table class="w-full">
-                                ${income.map(i => `<tr><td class="p-1">${i.n}</td><td class="text-right p-1">${fmt(i.v)}</td></tr>`).join('')}
-                            </table>
-                        </td>
-                        <td class="border border-black p-0">
-                             <table class="w-full">
-                                ${expense.map(i => `<tr><td class="p-1">${i.n}</td><td class="text-right p-1">${fmt(i.v)}</td></tr>`).join('')}
-                            </table>
-                        </td>
-                    </tr>
-                </tbody>
-                <tfoot>
-                    <tr class="font-bold bg-gray-50">
-                        <td class="border border-black p-2 flex justify-between"><span>รวมรับ</span> <span>${fmt(totalInc)}</span></td>
-                        <td class="border border-black p-2 text-right"><span>รวมจ่าย ${fmt(totalExp)}</span></td>
-                    </tr>
-                </tfoot>
-            </table>
-            
-            <div class="mt-4 p-4 border border-black bg-yellow-50 text-center">
-                <h2 class="text-xl font-bold">คงเหลือสุทธิ: ${fmt(net)} บาท</h2>
+            <div class="w-full overflow-x-auto">
+                <table class="w-full text-sm border-collapse">
+                    <thead>
+                        <tr class="bg-gray-100 border-b-2 border-black">
+                            <th class="p-2 w-[30%] text-left border-r border-black">รายการรับ</th>
+                            <th class="p-2 w-[15%] text-right border-r-2 border-black">จำนวนเงิน</th>
+                            <th class="p-2 w-[25%] text-left border-r border-black pl-4">รายการจ่าย</th>
+                            <th class="p-2 w-[15%] text-right border-r border-black">เรียกเก็บ</th>
+                            <th class="p-2 w-[15%] text-right">หักเก็บได้</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${tableRowsHtml}
+                    </tbody>
+                    <tfoot>
+                        <tr class="font-bold bg-gray-50 border-t-2 border-black">
+                            <td class="p-2 border-r border-black">รวมรายรับ</td>
+                            <td class="p-2 text-right border-r-2 border-black">${formatCurrency(totalIncome)}</td>
+                            <td class="p-2 border-r border-black pl-4">รวมรายจ่าย</td>
+                            <td class="p-2 text-right border-r border-black">${formatCurrency(totalBilled)}</td>
+                            <td class="p-2 text-right">${formatCurrency(totalDeducted)}</td>
+                        </tr>
+                    </tfoot>
+                </table>
             </div>
             
-             <footer class="mt-8 text-center print:hidden flex justify-center gap-4">
-                <button onclick="window.print()" class="bg-gray-600 text-white px-6 py-2 rounded shadow"><i class="fas fa-print"></i> พิมพ์</button>
+            <div class="border-t-2 border-black bg-yellow-50 p-4 text-center">
+                <h2 class="text-lg font-bold text-gray-700">คงเหลือสุทธิ</h2>
+                <div class="text-3xl font-bold my-2 text-black">${formatCurrency(net)} บาท</div>
+                <div class="text-sm text-gray-600">(${netInThai})</div>
+            </div>
+
+            <div class="border-t border-black p-4 text-sm bg-white grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div class="flex justify-between border-b sm:border-b-0 sm:border-r border-gray-200 p-2">
+                    <span><i class="fas fa-calendar-check mr-2 text-green-600"></i>โอนรอบ 1 (วันที่ ${key1 ? (key1.match(/วันที่ (.*)/)?.[1] || '-') : '-'})</span>
+                    <span class="font-bold">${formatCurrency(round1)}</span>
+                </div>
+                <div class="flex justify-between p-2">
+                    <span><i class="fas fa-calendar-check mr-2 text-green-600"></i>โอนรอบ 2 (วันที่ ${key2 ? (key2.match(/วันที่ (.*)/)?.[1] || '-') : '-'})</span>
+                    <span class="font-bold">${formatCurrency(round2)}</span>
+                </div>
+            </div>
+
+            <footer class="p-6 text-center print-hidden bg-gray-50 border-t border-black flex justify-center gap-4">
+                <button onclick="window.print()" class="bg-gray-700 hover:bg-black text-white px-6 py-2 rounded shadow flex items-center">
+                    <i class="fas fa-print mr-2"></i> พิมพ์
+                </button>
+                <button id="download-pdf-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded shadow flex items-center">
+                    <i class="fas fa-file-pdf mr-2"></i> ดาวน์โหลด PDF
+                </button>
             </footer>
           </div>
         `;
         
         slipDiv.innerHTML = slipHtml;
+
+        // PDF Listener
+        document.getElementById('download-pdf-btn').addEventListener('click', async () => {
+             const element = document.getElementById('slip-content-to-export');
+             const btns = element.querySelector('footer');
+             const closeBtn = element.querySelector('button[onclick="location.reload()"]');
+             
+             btns.style.display = 'none';
+             closeBtn.style.display = 'none';
+             
+             try {
+                const canvas = await html2canvas(element, { scale: 2 });
+                const imgData = canvas.toDataURL('image/png');
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF('p', 'mm', 'a4');
+                const imgProps = pdf.getImageProperties(imgData);
+                const pdfWidth = pdf.internal.pageSize.getWidth();
+                const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+                pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+                pdf.save(`สลิปเงินเดือน_${monthName}_${year}.pdf`);
+             } catch(err) {
+                 alert("เกิดข้อผิดพลาดในการสร้าง PDF");
+             } finally {
+                 btns.style.display = 'flex';
+                 closeBtn.style.display = 'block';
+             }
+        });
     }
   </script>
 </body>
